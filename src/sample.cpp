@@ -8,27 +8,45 @@
 
 using namespace Rcpp;
 
+arma::colvec samplingStep(
+    const arma::mat g,
+    const arma::colvec mt,
+    const arma::mat ct,
+    const arma::colvec at1,
+    const arma::mat rt1,
+    const arma::colvec theta,
+    const arma::mat w) {
+  
+  // more efficient than inverting rt, equivalent to C * G.t * inv(R)
+  const arma::mat cgrinv = solve(rt1.t(), g * ct.t()).t();
+  
+  // calculate the updated mean
+  const arma::mat mean = mt + cgrinv * (theta - at1);
+  
+  // calculate the updated covariance using Joseph Form
+  int n = mt.n_rows;
+  const arma::mat identity = arma::eye(n, n);
+  const arma::mat diff = identity - cgrinv * g;
+  const arma::mat covariance = diff * ct * diff.t() + cgrinv * w * cgrinv.t();
+  
+  // ensure symmetry
+  const arma::mat r = (covariance + covariance.t()) / 2.0;
+  
+  return rmvnorm(mean, r);
+}
+
+// backward sampling with Jordan form update
 void backwardSample(arma::mat & theta, const arma::mat & m, const arma::mat & a,
-                    const arma::cube & C, const arma::mat & G, const arma::cube & R_inv) {
-  const int T = theta.n_cols-1;
-  const int P = theta.n_rows;
-  arma::colvec h_t(P);
-  arma::mat H_t(P, P);
-
+                    const arma::cube & C, const arma::mat & G, const arma::cube & R,
+                    const arma::mat & W) {
+  
+  const int T = theta.n_cols - 1;
   theta.col(T) = rmvnorm(m.col(T), C.slice(T)); // draw theta_T
-  // Draw values for theta_{T-1} down to theta_0
-  for (int t = T-1; t>=0; --t) {
-    // Mean and variance of theta_t
-    h_t = m.col(t) + C.slice(t) * G.t() * R_inv.slice(t+1) *
-          (theta.col(t+1) - a.col(t+1));
-
-    H_t = C.slice(t) - C.slice(t) * G.t() *
-          R_inv.slice(t+1) * G * C.slice(t);
-
-    // Draw value for theta_t
-    theta.col(t) = rmvnorm(h_t, H_t);
+  
+  for (int t = T - 1; t >= 0; --t) {
+    theta.col(t) = samplingStep(G, m.col(t + 1), C.slice(t + 1), a.col(t), R.slice(t), 
+                         theta.col(t + 1), W);
   }
-  return;
 }
 
 void sampleAR(arma::mat & G, const arma::cube & W_inv, const arma::mat & theta,
